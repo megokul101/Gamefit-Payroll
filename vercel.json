@@ -1,0 +1,16 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 60,
+      "includeFiles": "{index.html,*.py}",
+      "excludeFiles": "{data/**,.venv/**,work/**,tests/**,scripts/**,__pycache__/**,**/*.sqlite3}"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/:path*",
+      "destination": "/api?__path=/:path*"
+    }
+  ]
+}
