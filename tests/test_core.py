@@ -64,3 +64,30 @@ class DeviceDeletionTests(unittest.TestCase):
    def disconnect(self):pass
   request['confirmId']='1'
   with self.assertRaises(ValueError):delete_enrollment(request,lambda:FakeAdmin())
+ def test_enroll_creates_one_user_and_leaves_existing_fingerprints(self):
+  from device_admin import enroll_user
+  from types import SimpleNamespace
+  class FakeDevice:
+   def __init__(self):self.users=[SimpleNamespace(user_id='20',uid=3,name='QA other',privilege=0)];self.created=[]
+   def get_users(self):return list(self.users)
+   def set_user(self,uid=None,name='',privilege=0,password='',group_id='',user_id='',card=0):self.created.append(user_id);self.users.append(SimpleNamespace(user_id=str(user_id),uid=uid,name=name,privilege=privilege))
+   def disconnect(self):pass
+  device=FakeDevice()
+  created=enroll_user({'id':'10','name':'QA target'},lambda:device)
+  self.assertEqual(created['status'],'Enrolled');self.assertEqual(created['deviceUid'],1);self.assertEqual(device.created,['10'])
+  linked=enroll_user({'id':'20','name':'Different name'},lambda:device)
+  self.assertEqual(linked['status'],'Already enrolled');self.assertEqual(device.created,['10']);self.assertEqual(device.users[0].name,'QA other')
+ def test_staff_delete_removes_only_that_terminal_user(self):
+  from device_admin import delete_staff_enrollment
+  from types import SimpleNamespace
+  class FakeDevice:
+   def __init__(self):self.users=[SimpleNamespace(user_id='10',uid=2,name='QA target',privilege=0),SimpleNamespace(user_id='20',uid=3,name='QA other',privilege=0)];self.deleted=[]
+   def get_users(self):return list(self.users)
+   def delete_user(self,uid):self.deleted.append(uid);self.users=[u for u in self.users if u.uid!=uid]
+   def disconnect(self):pass
+  device=FakeDevice();request={'id':'10','confirmId':'10','reason':'Left the company','acknowledged':True}
+  result=delete_staff_enrollment(request,lambda:device)
+  self.assertEqual(result['status'],'Deleted');self.assertEqual(device.deleted,[2]);self.assertEqual([u.user_id for u in device.users],['20'])
+  absent=delete_staff_enrollment(request,lambda:device)
+  self.assertEqual(absent['status'],'Already absent')
+  with self.assertRaises(ValueError):delete_staff_enrollment({**request,'confirmId':'11'},lambda:device)

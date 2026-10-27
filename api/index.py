@@ -78,9 +78,10 @@ class handler(Handler):
     token=cloud_auth.session_token();return self.redirect('/',{'Set-Cookie':'gamefit_session='+token+'; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=43200'})
    if not self.allowed():return self.send({'error':'Sign in required'},401)
    if path=='/api/logout':return self.redirect('/login',{'Set-Cookie':'gamefit_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0'})
-   if path=='/api/device/users/delete':
+   if path in ['/api/device/users/delete','/api/device/users/enroll','/api/device/users/remove']:
     from device_jobs import enqueue
-    return self.send(enqueue(self.json_body()))
+    body=self.json_body();body.setdefault('action',{'/api/device/users/enroll':'enroll','/api/device/users/remove':'remove'}.get(path,'delete'))
+    return self.send(enqueue(body))
    if path=='/api/sync':return self.send({'error':'The local connector pushes device data automatically; cloud hosting cannot poll a private LAN IP directly.'},409)
    if path=='/api/state':
     payload=self.json_body()

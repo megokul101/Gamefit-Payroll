@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gamefit local app. Reads eSSL users/logs; never writes to the terminal."""
+"""Gamefit local app. Attendance logs are read from the terminal. Staff add and delete also update that one enrollment."""
 import json, os, sqlite3, threading, time, csv, io, uuid, re
 from urllib.parse import urlparse,parse_qs
 from payroll_engine import calculate_month,payslip_pdf
@@ -106,6 +106,27 @@ def merge_changes(base,local,remote):
    if all(len(m)==len(arr) for m,arr in zip(maps,[base,local,remote])):
     return list(merge_changes(*maps).values())
  raise ValueError('Another edit changed the same records. Back up your changes and reload.')
+def record_device_result(request,result):
+ with LOCK:
+  current=read();state=current['state']
+  state.setdefault('staffEvents',[]).append({'id':request['id'],'action':'Device '+result['status'],'at':datetime.now().astimezone().isoformat(),'reason':request.get('reason','')})
+  if result['status'] in ['Deleted','Already absent']:
+   for member in state['staff']:
+    if member['id']==request['id']:member['deviceEnrolled']=False
+   if state.get('device') and 'enrolledIds' in state['device']:state['device']['enrolledIds']=[x for x in state['device']['enrolledIds'] if x!=request['id']]
+  if result['status'] in ['Enrolled','Already enrolled']:
+   for member in state['staff']:
+    if member['id']==request['id']:
+     member['deviceEnrolled']=True
+     if result.get('deviceUid') is not None:member['deviceUid']=result['deviceUid']
+     if result.get('deviceName'):member['deviceName']=result['deviceName']
+   if state.get('device') and 'enrolledIds' in state['device'] and request['id'] not in state['device']['enrolledIds']:state['device']['enrolledIds'].append(request['id'])
+  rev=write(state,current['revision'])
+ return {**result,'revision':rev,'state':state}
+def run_device_operation(operation,request):
+ if not SYNC.acquire(timeout=20):raise ValueError('Device is busy; try again after sync finishes')
+ try:return record_device_result(request,operation(request))
+ finally:SYNC.release()
 def validate_terms(state):
  for t in state.get('monthlyTerms',[]):
   if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])',t.get('month','')):raise ValueError('Invalid policy month')
@@ -155,23 +176,15 @@ class Handler(BaseHTTPRequestHandler):
  def do_POST(self):
   if not self.allowed() or self.headers.get('Content-Type')!='application/json':return self.send({'error':'Origin or content type rejected'},403)
   try:
-   if self.path=='/api/device/users/delete':
-    from device_admin import validate_delete_request,delete_enrollment
+   if self.path in ['/api/device/users/delete','/api/device/users/enroll','/api/device/users/remove']:
+    from device_admin import validate_delete_request,delete_enrollment,validate_enroll_request,enroll_user,validate_staff_delete,delete_staff_enrollment
     size=int(self.headers.get('Content-Length','0'))
-    if not 0<size<=10000:raise ValueError('Invalid delete request')
-    request=validate_delete_request(json.loads(self.rfile.read(size)))
-    if not SYNC.acquire(timeout=20):raise ValueError('Device is busy; try again after sync finishes')
-    try:
-     result=delete_enrollment(request)
-     with LOCK:
-      current=read();state=current['state'];state.setdefault('staffEvents',[]).append({'id':request['id'],'action':'Device deletion '+result['status'],'at':datetime.now().astimezone().isoformat(),'reason':request['reason']})
-      if result['status'] in ['Deleted','Already absent']:
-       for member in state['staff']:
-        if member['id']==request['id']:member['deviceEnrolled']=False
-       if state.get('device') and 'enrolledIds' in state['device']:state['device']['enrolledIds']=[x for x in state['device']['enrolledIds'] if x!=request['id']]
-      rev=write(state,current['revision'])
-     return self.send({**result,'revision':rev,'state':state})
-    finally:SYNC.release()
+    if not 0<size<=10000:raise ValueError('Invalid device request')
+    payload=json.loads(self.rfile.read(size))
+    if self.path.endswith('/enroll'):operation,request=enroll_user,validate_enroll_request(payload)
+    elif self.path.endswith('/remove'):operation,request=delete_staff_enrollment,validate_staff_delete(payload)
+    else:operation,request=delete_enrollment,validate_delete_request(payload)
+    return self.send(run_device_operation(operation,request))
    if self.path=='/api/sync':return self.send(sync_device())
    if self.path=='/api/issue-payslip':
     size=int(self.headers.get('Content-Length','0'))

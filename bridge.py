@@ -37,20 +37,28 @@ def post(payload,path='/api/device-ingest'):
  except urllib.error.HTTPError as e:raise RuntimeError('Cloud rejected the connector request (HTTP '+str(e.code)+')') from None
 
 def process_commands():
- from device_admin import delete_enrollment
  jobs=post({},'/api/device-commands/claim')['jobs']
  for job in jobs:
   try:
-   local=os.environ.get('GAMEFIT_LOCAL_API','')
+   request=job['request'];action=request.get('action','delete');local=os.environ.get('GAMEFIT_LOCAL_API','')
    if local:
     parsed=urlparse(local)
     if parsed.scheme!='http' or parsed.hostname not in ['127.0.0.1','localhost']:raise ValueError('Local API must use the loopback address')
-    url=local.rstrip('/')+'/api/device/users/delete'
-    request=urllib.request.Request(url,data=json.dumps(job['request']).encode(),headers={'Content-Type':'application/json'},method='POST')
-    with urllib.request.urlopen(request,timeout=60) as response:result=json.load(response)
-   else:result=delete_enrollment(job['request'])
+    url=local.rstrip('/')+{'enroll':'/api/device/users/enroll','remove':'/api/device/users/remove'}.get(action,'/api/device/users/delete')
+    outgoing=urllib.request.Request(url,data=json.dumps(request).encode(),headers={'Content-Type':'application/json'},method='POST')
+    with urllib.request.urlopen(outgoing,timeout=60) as response:result=json.load(response)
+   else:
+    if action=='enroll':
+     from device_admin import enroll_user
+     result=enroll_user(request)
+    elif action=='remove':
+     from device_admin import delete_staff_enrollment
+     result=delete_staff_enrollment(request)
+    else:
+     from device_admin import delete_enrollment
+     result=delete_enrollment(request)
   except Exception as e:result={'status':'Failed','message':str(e)[:400]}
-  post({'id':job['id'],'claimToken':job['claimToken'],'status':result['status'],'message':result['message']},'/api/device-commands/complete')
+  post({'id':job['id'],'claimToken':job['claimToken'],'status':result['status'],'message':result['message'],'deviceUid':result.get('deviceUid'),'deviceName':result.get('deviceName','')},'/api/device-commands/complete')
 
 def sync_once(full=False):
  process_commands()
